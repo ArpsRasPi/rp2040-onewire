@@ -1,0 +1,49 @@
+; Program assumes 10us per instruction
+.program one_wire
+get_next_inst:
+	pull block			; Pull instruction into OSR
+	mov x osr			; Move the OSR to X
+	jmp x-- read_or_write		; If X > 0 the instruction is either Read or Write
+
+reset_presence:				; Do Reset reset_presence (Inst == 0)
+	set pins 0b0		[31]	; Drive bus low, delay for 310/480us
+	nop			[17]	; Delay for remaining 170/480us
+	set pins 0b1		[7]	; Release bus and delay for 70us
+	set pindirs 0b0			; Set pin direction to input
+	in pins 1			; Read pin to ISR
+	set pindirs 0b1		[31]	; Restore pin direction to output and delay for 310/410us
+	nop			[10]	; Delay for remaining 100/410us
+	push block			; Return the response to the FIFO
+	jmp get_next_inst
+
+
+
+read_or_write:
+	pull block			; Next word is the number of bits
+	mov y osr			; Move number of bits to read/write into y
+	jmp !x read_bits		; If x==0, instruction was Read (== 1)
+
+
+
+write:
+	pull block			; Pull the first word of output data
+write_bits:
+	jmp y-- get_next_inst		; If y is now 0, we've finished writing
+	pull ifempty block		; Otherwise, pull more data to send if needed
+	out x 1			; Shift the LSB into x
+	jmp !x write_zero		; If x is zero, write 0
+write_one:
+	set pins 0b0		[0]	; Drive bus low, delay for 10us
+	set pins 0b1		[7]	; Release bus, delay for 70us
+	jmp write_bits
+write_zero:
+	set pins 0b0		[6]	; Drive bus low, delay for 60us
+	set pins 0b1		[1]	; Release bus, delay for 10us
+	jmp write_bits
+	
+	
+
+read:
+read_bits:
+	; todo
+	jmp get_next_inst

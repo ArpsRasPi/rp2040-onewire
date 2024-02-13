@@ -1,10 +1,9 @@
-//! Blinks the LED on a Pico board
+//! Implementation of the one-wire protocol for RP2040 using PIO
 //!
-//! This will blink an LED attached to GP25, which is the pin the Pico uses for the on-board LED.
+//! Initially used to drive a DS18B20 digital thermometer
 #![no_std]
 #![no_main]
 
-use bsp::entry;
 use defmt::*;
 use defmt_rtt as _;
 use embedded_hal::digital::v2::OutputPin;
@@ -15,16 +14,25 @@ use panic_probe as _;
 use rp_pico as bsp;
 // use sparkfun_pro_micro_rp2040 as bsp;
 
-use bsp::hal::{
-    clocks::{init_clocks_and_plls, Clock},
-    pac,
-    sio::Sio,
-    watchdog::Watchdog,
+use bsp::{
+    entry,
+    hal::{
+        clocks::{init_clocks_and_plls, Clock},
+        gpio::{FunctionPio0, Pin},
+        pac,
+        pio::{PIOExt, PinDir},
+        sio::Sio,
+        watchdog::Watchdog,
+    },
 };
+
+use pio_proc::pio_file;
 
 #[entry]
 fn main() -> ! {
     info!("Program start");
+
+    // Device set up starts
     let mut pac = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
@@ -52,26 +60,17 @@ fn main() -> ! {
         sio.gpio_bank0,
         &mut pac.RESETS,
     );
+    // Device setup ends
 
-    // This is the correct pin on the Raspberry Pico board. On other boards, even if they have an
-    // on-board LED, it might need to be changed.
-    //
-    // Notably, on the Pico W, the LED is not connected to any of the RP2040 GPIOs but to the cyw43 module instead.
-    // One way to do that is by using [embassy](https://github.com/embassy-rs/embassy/blob/main/examples/rp/src/bin/wifi_blinky.rs)
-    //
-    // If you have a Pico W and want to toggle a LED with a simple GPIO output pin, you can connect an external
-    // LED to one of the GPIO pins, and reference that pin here. Don't forget adding an appropriate resistor
-    // in series with the LED.
-    let mut led_pin = pins.led.into_push_pull_output();
+    // Change the GPIO pin here for the data bus
+    let pin_bus: Pin<_, FunctionPio0, _> = pins.gpio28.into_function();
 
-    loop {
-        info!("on!");
-        led_pin.set_high().unwrap();
-        delay.delay_ms(500);
-        info!("off!");
-        led_pin.set_low().unwrap();
-        delay.delay_ms(500);
-    }
+    let program_with_defines = pio_file!(
+        "./src/one_wire.pio",
+        select_program("one_wire"),
+        options(max_program_size = 32)
+    );
+
+    loop {}
 }
-
 // End of file
