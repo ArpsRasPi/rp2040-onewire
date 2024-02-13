@@ -1,18 +1,20 @@
 ; Program assumes 10us per instruction
 .program one_wire
 get_next_inst:
+	set pindirs 0b1
+	set pins 0b1
 	pull block			; Pull instruction into OSR
 	mov x osr			; Move the OSR to X
 	jmp x-- read_or_write		; If X > 0 the instruction is either Read or Write
 
-reset_presence:				; Do Reset reset_presence (Inst == 0)
+reset_presence:				; Do Reset/Presence (Inst == 0)
 	set pins 0b0		[31]	; Drive bus low, delay for 310/480us
-	nop			[17]	; Delay for remaining 170/480us
-	set pins 0b1		[7]	; Release bus and delay for 70us
-	set pindirs 0b0			; Set pin direction to input
+	nop			[16]	; Delay for remaining 170/480us (10 for nop)
+	set pins 0b1		[6]	; Release bus and delay for 60/70us
+	set pindirs 0b0			; Set pin direction to input (for the last 10/70us)
 	in pins 1			; Read pin to ISR
-	set pindirs 0b1		[31]	; Restore pin direction to output and delay for 310/410us
-	nop			[10]	; Delay for remaining 100/410us
+	set pindirs 0b1		[31]	; Restore pin direction to output and delay for 320/410us (10 for set)
+	nop			[9]	; Delay for remaining 90/410us
 	push block			; Return the response to the FIFO
 	jmp get_next_inst
 

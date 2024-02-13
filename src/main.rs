@@ -20,7 +20,7 @@ use bsp::{
         clocks::{init_clocks_and_plls, Clock},
         gpio::{FunctionPio0, Pin},
         pac,
-        pio::{PIOExt, PinDir},
+        pio::{PIOBuilder, PIOExt, PinDir, ShiftDirection},
         sio::Sio,
         watchdog::Watchdog,
     },
@@ -62,6 +62,11 @@ fn main() -> ! {
     );
     // Device setup ends
 
+    // Get a handle to the LED for feedback
+    let mut led_pin = pins
+        .led
+        .into_push_pull_output_in_state(embedded_hal::digital::v2::PinState::Low);
+
     // Change the GPIO pin here for the data bus
     let pin_bus: Pin<_, FunctionPio0, _> = pins.gpio28.into_function();
 
@@ -71,6 +76,60 @@ fn main() -> ! {
         options(max_program_size = 32)
     );
 
-    loop {}
+    let program = program_with_defines.program;
+
+    // Initialise and start the PIO
+    let (mut pio, sm0, _sm1, _sm2, _sm3) = pac.PIO0.split(&mut pac.RESETS);
+    let installed = pio.install(&program).unwrap();
+    let (int, frac) = (120, 0); // I *think* this will set each clock cycle to be 10us!
+    let (mut sm, mut rx, mut tx) = PIOBuilder::from_program(installed)
+        .set_pins(pin_bus.id().num, 1)
+        .in_pin_base(pin_bus.id().num)
+        .clock_divisor_fixed_point(int, frac)
+        .out_shift_direction(ShiftDirection::Right)
+        .build(sm0);
+
+    sm.set_pindirs([(pin_bus.id().num, PinDir::Output)]);
+    sm.set_pins([(pin_bus.id().num, bsp::hal::pio::PinState::High)]);
+
+    sm.start();
+
+    loop {
+        led_pin.set_low().unwrap();
+        delay.delay_ms(1000);
+        led_pin.set_high().unwrap();
+        delay.delay_ms(50);
+        led_pin.set_low().unwrap();
+        delay.delay_ms(50);
+        // Try to do a reset and detect
+        // Push 0
+        // Pull response
+        if !tx.write(0) {
+            for _ in 0..20 {
+                led_pin.set_high().unwrap();
+                delay.delay_ms(100);
+                led_pin.set_low().unwrap();
+                delay.delay_ms(100);
+            }
+            continue;
+        }
+        // The reset should take 960+us, so lets delay a few ms.
+        delay.delay_ms(2);
+        if let Some(result) = rx.read() {
+            if result == 0 {
+                led_pin.set_high().unwrap();
+                delay.delay_ms(5000);
+                led_pin.set_low().unwrap();
+            }
+        } else {
+            for _ in 0..40 {
+                led_pin.set_high().unwrap();
+                delay.delay_ms(50);
+                led_pin.set_low().unwrap();
+                delay.delay_ms(50);
+            }
+        }
+    }
 }
+
 // End of file
