@@ -64,10 +64,11 @@ fn main() -> ! {
 
     // Get a handle to the LED for feedback
     let mut led_pin = pins
-        .led
+        .gpio16
         .into_push_pull_output_in_state(embedded_hal::digital::v2::PinState::Low);
 
     // Change the GPIO pin here for the data bus
+    info!("Configuring PIO");
     let pin_bus: Pin<_, FunctionPio0, _> = pins.gpio28.into_function();
 
     let program_with_defines = pio_file!(
@@ -81,7 +82,7 @@ fn main() -> ! {
     // Initialise and start the PIO
     let (mut pio, sm0, _sm1, _sm2, _sm3) = pac.PIO0.split(&mut pac.RESETS);
     let installed = pio.install(&program).unwrap();
-    let (int, frac) = (120, 0); // I *think* this will set each clock cycle to be 10us!
+    let (int, frac) = (1200, 0); // I *think* this will set each clock cycle to be 10us!
     let (mut sm, mut rx, mut tx) = PIOBuilder::from_program(installed)
         .set_pins(pin_bus.id().num, 1)
         .in_pin_base(pin_bus.id().num)
@@ -92,36 +93,58 @@ fn main() -> ! {
     sm.set_pindirs([(pin_bus.id().num, PinDir::Output)]);
     sm.set_pins([(pin_bus.id().num, bsp::hal::pio::PinState::High)]);
 
+    info!("Starting PIO");
     sm.start();
 
     loop {
+        // Flash the LED to symbolise start of the test
         led_pin.set_low().unwrap();
         delay.delay_ms(1000);
+
+        info!("Starting Loop");
         led_pin.set_high().unwrap();
         delay.delay_ms(50);
         led_pin.set_low().unwrap();
         delay.delay_ms(50);
-        // Try to do a reset and detect
-        // Push 0
-        // Pull response
+
+        // Do a reset and detact presence
+
+        // Push 0 to tx - this is the reset/detect presence instruction
         if !tx.write(0) {
+            // If that fails (because the FIFI is full), flash the LED x20@100ms
+            info!("Writing Instruction Failed!");
             for _ in 0..20 {
                 led_pin.set_high().unwrap();
                 delay.delay_ms(100);
                 led_pin.set_low().unwrap();
                 delay.delay_ms(100);
             }
+            // Try again
             continue;
         }
-        // The reset should take 960+us, so lets delay a few ms.
+
+        info!("Succesfully wrote intruction to tx FIFO.");
+        // The reset should take 960+us, so lets delay a couple of ms.
         delay.delay_ms(2);
+
+        // Pull response from rx FIFO
         if let Some(result) = rx.read() {
+            // A 0 result means that the pin was low when read.
+            // This is the indicator of at least one device present
             if result == 0 {
+                info!("**** DEVICE DETECTED ****");
+                // Give a triumphant 5 second long blast on the LED! It worked!
                 led_pin.set_high().unwrap();
                 delay.delay_ms(5000);
                 led_pin.set_low().unwrap();
+            } else {
+                info!("No device detected");
             }
+            // Otherwise, the happy LED will remain un-illuminated. Sadge.
         } else {
+            // This means that the rx fifo could not be pulled, probably because it was empty
+            // Flash the LED x40@50ms
+            info!("Nothing returned from rx FIFO");
             for _ in 0..40 {
                 led_pin.set_high().unwrap();
                 delay.delay_ms(50);
