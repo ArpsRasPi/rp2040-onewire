@@ -1,9 +1,9 @@
 ; Program assumes 10us per instruction
 .program one_wire
+
+.wrap_target
 get_next_inst:
-	pull block			; Pull instruction into OSR
-	mov x osr			; Move the OSR to X
-	jmp x-- read_or_write		; If X > 0 the instruction is either Read or Write
+	jmp get_next_inst		; Loop tichtly until jmp instructions sent
 
 reset_presence:				; Do Reset/Presence (Inst == 0)
 	set pins 0b0		[31]	; Drive bus low, delay for 310/480us
@@ -13,9 +13,7 @@ reset_presence:				; Do Reset/Presence (Inst == 0)
 	in pins 1			; Read pin to ISR
 	push block		[31]	; Return the response to the FIFO and delay for 320/410us (10 for push)
 	set pindirs 0b1		[8]	; Restore pin direction to output and lay for remaining 90/410us (10 for set)
-	jmp get_next_inst
-
-
+.wrap
 
 read_or_write:
 	pull block			; Next word is the number of bits

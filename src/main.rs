@@ -9,6 +9,7 @@ use defmt_rtt as _;
 use embedded_hal::digital::v2::OutputPin;
 use panic_probe as _;
 
+use pio::Instruction;
 // Provide an alias for our BSP so we can switch targets quickly.
 // Uncomment the BSP you included in Cargo.toml, the rest of the code does not need to change.
 use rp_pico as bsp;
@@ -94,7 +95,7 @@ fn main() -> ! {
     sm.set_pins([(pin_bus.id().num, bsp::hal::pio::PinState::High)]);
 
     info!("Starting PIO");
-    sm.start();
+    let mut running_sm = sm.start();
 
     loop {
         // Flash the LED to symbolise start of the test
@@ -110,20 +111,16 @@ fn main() -> ! {
         // Do a reset and detact presence
 
         // Push 0 to tx - this is the reset/detect presence instruction
-        if !tx.write(0) {
-            // If that fails (because the FIFI is full), flash the LED x20@100ms
-            info!("Writing Instruction Failed!");
-            for _ in 0..20 {
-                led_pin.set_high().unwrap();
-                delay.delay_ms(100);
-                led_pin.set_low().unwrap();
-                delay.delay_ms(100);
-            }
-            // Try again
-            continue;
-        }
+        running_sm.exec_instruction(Instruction {
+            side_set: None,
+            delay: 0,
+            operands: pio::InstructionOperands::JMP {
+                condition: pio::JmpCondition::Always,
+                address: 1,
+            },
+        });
 
-        info!("Succesfully wrote intruction to tx FIFO.");
+        info!("Exec instruction sent");
         // The reset should take 960+us, so lets delay a couple of ms.
         delay.delay_ms(2);
 
