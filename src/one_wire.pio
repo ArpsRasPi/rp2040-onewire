@@ -1,8 +1,6 @@
 ; Program assumes 10us per instruction
 .program one_wire
 get_next_inst:
-	set pindirs 0b1
-	set pins 0b1
 	pull block			; Pull instruction into OSR
 	mov x osr			; Move the OSR to X
 	jmp x-- read_or_write		; If X > 0 the instruction is either Read or Write
@@ -13,9 +11,8 @@ reset_presence:				; Do Reset/Presence (Inst == 0)
 	set pins 0b1		[6]	; Release bus and delay for 60/70us
 	set pindirs 0b0			; Set pin direction to input (for the last 10/70us)
 	in pins 1			; Read pin to ISR
-	set pindirs 0b1		[31]	; Restore pin direction to output and delay for 320/410us (10 for set)
-	nop			[9]	; Delay for remaining 90/410us
-	push block			; Return the response to the FIFO
+	push block		[31]	; Return the response to the FIFO and delay for 320/410us (10 for push)
+	set pindirs 0b1		[8]	; Restore pin direction to output and lay for remaining 90/410us (10 for set)
 	jmp get_next_inst
 
 
@@ -23,16 +20,18 @@ reset_presence:				; Do Reset/Presence (Inst == 0)
 read_or_write:
 	pull block			; Next word is the number of bits
 	mov y osr			; Move number of bits to read/write into y
-	jmp !x read_bits		; If x==0, instruction was Read (== 1)
+	jmp !x read_bits		; If x==0, instruction was Read (was == 1)
 
 
 
 write:
 	pull block			; Pull the first word of output data
 write_bits:
-	jmp y-- get_next_inst		; If y is now 0, we've finished writing
-	pull ifempty block		; Otherwise, pull more data to send if needed
-	out x 1			; Shift the LSB into x
+	jmp y-- w_b_continue		; If y>0, decrement and continue
+	jmp get_next_inst		; Otherwise we're done - go get next instruction
+w_b_continue:
+	pull ifempty block		; Pull more data to send if needed
+	out x 1				; Shift the LSB into x
 	jmp !x write_zero		; If x is zero, write 0
 write_one:
 	set pins 0b0		[0]	; Drive bus low, delay for 10us
@@ -47,5 +46,13 @@ write_zero:
 
 read:
 read_bits:
-	; todo
-	jmp get_next_inst
+	jmp y-- r_b_continue		; If y is not 0, decrement and continue
+	push block			; All bits read - push the remaining data to the rx FIFO
+	jmp get_next_inst		; Otherwise we're done - go get next instruction
+r_b_continue:
+	set pins 0b0		[0]	; Drive bus low, delay for 10us (from the set)
+	set pins 0b1		[0]	; Release bus, delay for 10us (from the set)
+	set pindirs 0b0			; Set pin direction to input 
+	in pins 1			; Read pin to ISR
+	push iffull block	[5]	; If the ISR is full, push it onto the RX FIFO, delay for 60us (10 from the push)
+	jmp read_bits
