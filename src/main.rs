@@ -4,12 +4,13 @@
 #![no_std]
 #![no_main]
 
+use cortex_m::delay::Delay;
 use defmt::*;
 use defmt_rtt as _;
-use embedded_hal::digital::v2::OutputPin;
+use embedded_hal::digital::v2::{OutputPin, PinState};
 use panic_probe as _;
 
-use pio::Instruction;
+use pio::{Instruction, SetDestination};
 // Provide an alias for our BSP so we can switch targets quickly.
 // Uncomment the BSP you included in Cargo.toml, the rest of the code does not need to change.
 use rp_pico as bsp;
@@ -20,12 +21,11 @@ use bsp::{
     hal::{
         clocks::{init_clocks_and_plls, Clock},
         gpio::{FunctionPio0, Pin},
-        pac,
+        pac::{CorePeripherals, Peripherals},
         pio::{PIOBuilder, PIOExt, PinDir, ShiftDirection},
         sio::Sio,
         watchdog::Watchdog,
-    },
-};
+    }, Pins, };
 
 use pio_proc::pio_file;
 
@@ -34,8 +34,8 @@ fn main() -> ! {
     info!("Program start");
 
     // Device set up starts
-    let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
+    let mut pac = Peripherals::take().unwrap();
+    let core = CorePeripherals::take().unwrap();
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
     let sio = Sio::new(pac.SIO);
 
@@ -53,9 +53,9 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    let mut delay = Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
-    let pins = bsp::Pins::new(
+    let pins = Pins::new(
         pac.IO_BANK0,
         pac.PADS_BANK0,
         sio.gpio_bank0,
@@ -66,8 +66,20 @@ fn main() -> ! {
     // Get a handle to the LED for feedback
     let mut led_pin = pins
         .gpio16
-        .into_push_pull_output_in_state(embedded_hal::digital::v2::PinState::Low);
-
+        .into_push_pull_output_in_state(PinState::Low);
+    // Get some pins for signalling different operations that can be used
+    // to trigger logic analyser captures
+    
+    let mut dbg_reset_pin = pins
+        .gpio10
+        .into_push_pull_output_in_state(PinState::Low);
+    let mut dbg_write_pin = pins
+        .gpio11
+        .into_push_pull_output_in_state(PinState::Low);
+    let mut dbg_read_pin = pins
+        .gpio12
+        .into_push_pull_output_in_state(PinState::Low);
+    
     // Change the GPIO pin here for the data bus
     info!("Configuring PIO");
     let pin_bus: Pin<_, FunctionPio0, _> = pins.gpio28.into_function();
@@ -98,19 +110,18 @@ fn main() -> ! {
     let mut running_sm = sm.start();
 
     loop {
-        // Flash the LED to symbolise start of the test
-        led_pin.set_low().unwrap();
         delay.delay_ms(1000);
-
         info!("Starting Loop");
         led_pin.set_high().unwrap();
         delay.delay_ms(50);
         led_pin.set_low().unwrap();
         delay.delay_ms(50);
 
-        // Do a reset and detact presence
-
+        // Do a reset and detect presence
         // Push 0 to tx - this is the reset/detect presence instruction
+        // Strobe dbg pin
+        dbg_reset_pin.set_high().unwrap();
+        dbg_reset_pin.set_low().unwrap();
         running_sm.exec_instruction(Instruction {
             side_set: None,
             delay: 0,
@@ -119,35 +130,96 @@ fn main() -> ! {
                 address: 1,
             },
         });
-
-        info!("Exec instruction sent");
+        info!("Exec instruction sent to JMP to RESET/DETECT");
         // The reset should take 960+us, so lets delay a couple of ms.
         delay.delay_ms(2);
-
         // Pull response from rx FIFO
         if let Some(result) = rx.read() {
             // A 0 result means that the pin was low when read.
             // This is the indicator of at least one device present
             if result == 0 {
                 info!("**** DEVICE DETECTED ****");
-                // Give a triumphant 5 second long blast on the LED! It worked!
-                led_pin.set_high().unwrap();
-                delay.delay_ms(5000);
-                led_pin.set_low().unwrap();
             } else {
                 info!("No device detected");
             }
-            // Otherwise, the happy LED will remain un-illuminated. Sadge.
         } else {
             // This means that the rx fifo could not be pulled, probably because it was empty
-            // Flash the LED x40@50ms
             info!("Nothing returned from rx FIFO");
-            for _ in 0..40 {
-                led_pin.set_high().unwrap();
-                delay.delay_ms(50);
-                led_pin.set_low().unwrap();
-                delay.delay_ms(50);
+        }
+
+        // Do a write of some bits
+        let data :u8 = 0b01010101;
+        dbg_write_pin.set_high().unwrap();
+        dbg_write_pin.set_low().unwrap();
+        
+        // First, put 1 into x scratch register
+        running_sm.exec_instruction(Instruction {
+            side_set: None,
+            delay: 0,
+            operands: pio::InstructionOperands::SET { destination: SetDestination::X, data: 1 }
+        });
+        info!("Exec instruction sent for SET X 1");
+        // Then jump to read/write
+        running_sm.exec_instruction(Instruction {
+            side_set: None,
+            delay: 0,
+            operands: pio::InstructionOperands::JMP {
+                condition: pio::JmpCondition::Always,
+                address: 8,
+            },
+        });
+        info!("Exec instruction sent to JMP to READ_WRITE");
+        // That'll block for the bit count, so send it
+        if tx.write(8) {
+            info!("Sent bit count (8)");
+            // Send data
+            if tx.write(data as u32) {
+                info!("Sent data.");
             }
+            else {
+                info!("Failed to send data.");
+            }
+        }
+        else {
+            info!("Failed to write bit count");
+        }
+
+        // Do a read of some data
+        dbg_read_pin.set_high().unwrap();
+        dbg_read_pin.set_low().unwrap();
+        // First, put 0 into x scratch register
+        running_sm.exec_instruction(Instruction {
+            side_set: None,
+            delay: 0,
+            operands: pio::InstructionOperands::SET { destination: SetDestination::X, data: 0 }
+        });
+        info!("Exec instruction sent for SET X 0");
+        // Then jump to read/write
+        running_sm.exec_instruction(Instruction {
+            side_set: None,
+            delay: 0,
+            operands: pio::InstructionOperands::JMP {
+                condition: pio::JmpCondition::Always,
+                address: 8,
+            },
+        });
+        info!("Exec instruction sent to JMP to READ_WRITE");
+        // That'll block for the bit count, so send it
+        if tx.write(3) {
+            info!("Sent bit count (3)");
+            // Read data
+            // Wait for the read to complete.
+            // Each read is about 100us so we'll wait for a couple of ms
+            delay.delay_ms(2);
+            if let Some(result) = rx.read() {
+                info!("Did a read! Got result {}", result);
+            }
+            else {
+                info!("Did not receive result.");
+            }
+        }
+        else {
+            info!("Failed to write read bit count");
         }
     }
 }
