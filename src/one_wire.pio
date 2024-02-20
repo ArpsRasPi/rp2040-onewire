@@ -1,56 +1,56 @@
 ; Program assumes 10us per instruction
 .program one_wire
+.side_set 1 pindirs
 
 .wrap_target
-get_next_inst:
-	jmp get_next_inst		; Loop tightly until jmp instructions sent
+next_inst:
+	jmp next_inst		side 0	[0]	; Loop tightly until jmp instructions sent
 
-reset_presence:				; Do Reset/Presence (Inst == 0)
-	set pins 0b0		[31]	; (01) Drive bus low, delay for 310/480us
-	nop			[16]	; Delay for remaining 170/480us (10 for nop)
-	set pins 0b1		[6]	; Release bus and delay for 60/70us
-	set pindirs 0b0			; Set pin direction to input (for the last 10/70us)
-	in pins 1			; Read pin to ISR
-	push block		[31]	; Return the response to the FIFO and delay for 320/410us (10 for push)
-	set pindirs 0b1		[8]	; Restore pin direction to output and lay for remaining 90/410us (10 for set)
+reset_presence:					; Do Reset/Presence (Inst == 0)
+	set pins 0b0		side 1	[15]	; (01) Drive bus low, delay for 160/480us
+	nop			side 1	[15]	; Delay for 320/480us
+	nop			side 1	[15]	; Delay for remaining 480/480us
+	nop			side 0	[6]	; Release bus delay for 70us
+	in pins 1		side 0	[15]	; Read pin to ISR, delay 160/410us
+	push block		side 0	[15]	; Return the response to the FIFO and delay for 320/410us (10 for push)
+	nop			side 0	[8]	; Restore pin direction to output and lay for remaining 410/410us (10 for set)
 .wrap
 
 read_or_write:
-	pull block			; (08) Next word is the number of bits
-	mov y osr			; Move number of bits to read/write into y
-	jmp !x read_bits		; If x==0 instruction is Read 
+	pull block		side 0	[0]	; (08) Next word is the number of bits
+	mov y osr		side 0	[0]	; Move number of bits to read/write into y
+	jmp !x read_bits 	side 0	[0]	; If x==0 instruction is Read 
 
 
 
 write:
-	pull block			; Pull the first word of output data
+	pull block		side 0	[0]	; Pull the first word of output data
 write_bits:
-	jmp y-- w_b_continue		; If y>0, decrement and continue
-	jmp get_next_inst		; Otherwise we're done - go get next instruction
+	jmp y-- w_b_continue	side 0	[0]	; If y>0, decrement and continue
+	jmp next_inst		side 0	[0]	; Otherwise we're done - go get next instruction
 w_b_continue:
-	pull ifempty block		; Pull more data to send if needed
-	out x 1				; Shift the LSB into x
-	jmp !x write_zero		; If x is zero, write 0
+	pull ifempty block	side 0	[0]	; Pull more data to send if needed
+	out x 1			side 0	[0]	; Shift the LSB into x
+	jmp !x write_zero	side 0	[0]	; If x is zero, write 0
 write_one:
-	set pins 0b0		[0]	; Drive bus low, delay for 10us
-	set pins 0b1		[1]	; Release bus, delay for 70us
-	jmp write_bits
+	set pins 0b0		side 1	[0]	; Drive bus low, delay for 10us
+	set pins 0b1		side 0	[1]	; Release bus, delay for 70us
+	jmp write_bits		side 0	[0]
 write_zero:
-	set pins 0b0		[5]	; Drive bus low, delay for 60us
-	set pins 0b1		[0]	; Release bus, delay for 10us
-	jmp write_bits
+	set pins 0b0		side 1	[5]	; Drive bus low, delay for 60us
+	set pins 0b1		side 0	[0]	; Release bus, delay for 10us
+	jmp write_bits		side 0	[0]
 	
 	
 
 read:
 read_bits:
-	jmp y-- r_b_continue		; If y is not 0, decrement and continue
-	push block			; All bits read - push the remaining data to the rx FIFO
-	jmp get_next_inst		; Otherwise we're done - go get next instruction
+	jmp y-- r_b_continue	side 0	[0]	; If y is not 0, decrement and continue
+	push block		side 0	[0]	; All bits read - push the remaining data to the rx FIFO
+	jmp next_inst		side 0	[0]	; Otherwise we're done - go get next instruction
 r_b_continue:
-	set pins 0b0		[0]	; Drive bus low, delay for 10us (from the set)
-	set pins 0b1		[0]	; Release bus, delay for 10us (from the set)
-	set pindirs 0b0			; Set pin direction to input 
-	in pins 1			; Read pin to ISR
-	push iffull block	[5]	; If the ISR is full, push it onto the RX FIFO, delay for 60us (10 from the push)
-	jmp read_bits
+	set pins 0b0		side 1	[0]	; Drive bus low, delay for 10us (from the set)
+	set pins 0b1		side 0	[0]	; Release bus, delay for 10us (from the set)
+	in pins 1		side 0	[0]	; Read pin to ISR
+	push iffull block	side 0	[5]	; If the ISR is full, push it onto the RX FIFO, delay for 60us (10 from the push)
+	jmp read_bits		side 0	[0]

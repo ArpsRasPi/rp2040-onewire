@@ -29,6 +29,9 @@ use bsp::{
 
 use pio_proc::pio_file;
 
+const OFFSET_RESET: u8 = 2;
+const OFFSET_READ_WRITE: u8 = 9;
+
 #[entry]
 fn main() -> ! {
     info!("Program start");
@@ -98,13 +101,14 @@ fn main() -> ! {
     let (int, frac) = (1200, 0); // I *think* this will set each clock cycle to be 10us!
     let (mut sm, mut rx, mut tx) = PIOBuilder::from_program(installed)
         .set_pins(pin_bus.id().num, 1)
+        .side_set_pin_base(pin_bus.id().num)
         .in_pin_base(pin_bus.id().num)
         .clock_divisor_fixed_point(int, frac)
         .out_shift_direction(ShiftDirection::Right)
         .build(sm0);
 
     sm.set_pindirs([(pin_bus.id().num, PinDir::Output)]);
-    sm.set_pins([(pin_bus.id().num, bsp::hal::pio::PinState::High)]);
+    sm.set_pins([(pin_bus.id().num, rp_pico::hal::pio::PinState::High)]);
 
     info!("Starting PIO");
     let mut running_sm = sm.start();
@@ -121,15 +125,17 @@ fn main() -> ! {
         // Push 0 to tx - this is the reset/detect presence instruction
         // Strobe dbg pin
         dbg_reset_pin.set_high().unwrap();
+        delay.delay_us(10);
         dbg_reset_pin.set_low().unwrap();
         running_sm.exec_instruction(Instruction {
-            side_set: None,
+            side_set: Some(0),
             delay: 0,
             operands: pio::InstructionOperands::JMP {
                 condition: pio::JmpCondition::Always,
-                address: 1,
+                address: OFFSET_RESET,
             },
         });
+
         info!("Exec instruction sent to JMP to RESET/DETECT");
         // The reset should take 960+us, so lets delay a couple of ms.
         delay.delay_ms(2);
@@ -150,22 +156,23 @@ fn main() -> ! {
         // Do a write of some bits
         let data :u8 = 0b01010101;
         dbg_write_pin.set_high().unwrap();
+        delay.delay_us(10);
         dbg_write_pin.set_low().unwrap();
         
         // First, put 1 into x scratch register
         running_sm.exec_instruction(Instruction {
-            side_set: None,
+            side_set: Some(0),
             delay: 0,
             operands: pio::InstructionOperands::SET { destination: SetDestination::X, data: 1 }
         });
         info!("Exec instruction sent for SET X 1");
         // Then jump to read/write
         running_sm.exec_instruction(Instruction {
-            side_set: None,
+            side_set: Some(0),
             delay: 0,
             operands: pio::InstructionOperands::JMP {
                 condition: pio::JmpCondition::Always,
-                address: 8,
+                address: OFFSET_READ_WRITE,
             },
         });
         info!("Exec instruction sent to JMP to READ_WRITE");
@@ -184,23 +191,28 @@ fn main() -> ! {
             info!("Failed to write bit count");
         }
 
+        // The write should take 8*100us, so lets delay a couple of ms.
+        delay.delay_ms(2);
+        
+
         // Do a read of some data
         dbg_read_pin.set_high().unwrap();
+        delay.delay_us(10);
         dbg_read_pin.set_low().unwrap();
         // First, put 0 into x scratch register
         running_sm.exec_instruction(Instruction {
-            side_set: None,
+            side_set: Some(0),
             delay: 0,
             operands: pio::InstructionOperands::SET { destination: SetDestination::X, data: 0 }
         });
         info!("Exec instruction sent for SET X 0");
         // Then jump to read/write
         running_sm.exec_instruction(Instruction {
-            side_set: None,
+            side_set: Some(0),
             delay: 0,
             operands: pio::InstructionOperands::JMP {
                 condition: pio::JmpCondition::Always,
-                address: 8,
+                address: OFFSET_READ_WRITE,
             },
         });
         info!("Exec instruction sent to JMP to READ_WRITE");
